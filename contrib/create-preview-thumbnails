@@ -1,0 +1,60 @@
+#!/usr/bin/bash
+
+# This script creates thumbnail sprites for the preview thumbnails
+# plugin using ffmpeg and montage from ImageMagick. It also creates
+# the corresponding vtt file.
+
+FRAME_WIDTH=178
+FRAME_HEIGHT=100
+MAX_COLUMNS=8
+MAX_ROWS=6
+SECONDS_BETWEEN_FRAMES=5
+SPRITE_JPEG_QUALITY=80
+
+if [[ $# -lt 2 ]]; then
+    echo "Usage: $0 my_video.mp4 my_video_thumbs"
+    exit 1
+fi
+
+video_file=$1
+output_prefix=$2
+
+sprite_file_prefix=${output_prefix}_
+vtt_file=${output_prefix}.vtt
+
+tmpdir=$(mktemp --tmpdir --directory video-thumbnails.XXX)
+trap 'rm -rf -- "$tmpdir"' EXIT
+
+
+# Extract frames from video file with ffmpeg
+
+ffmpeg -v quiet -stats -i "$video_file" \
+    -vf "fps=1/${SECONDS_BETWEEN_FRAMES},scale=${FRAME_WIDTH}:${FRAME_HEIGHT}" \
+    "$tmpdir/frame_%08d.png"
+
+num_images=$(ls -1 "$tmpdir" | wc -l)
+
+
+# Combine frames into one or more sprites
+
+montage "$tmpdir"/frame_*.png -tile "${MAX_COLUMNS}x${MAX_ROWS}" -geometry "+0+0" \
+    -background black -quality "$SPRITE_JPEG_QUALITY" "${sprite_file_prefix}%d.jpg"
+
+
+# Generate index file in WEBVTT format
+
+printf "WEBVTT\n" > "$vtt_file"
+
+let column=0 row=0 file=0
+for (( image=1; image<=$num_images; ++image )); do
+    start_time=$(date "+%T.000" -d "2020-01-01T00:00:00 $(( (image - 1) * SECONDS_BETWEEN_FRAMES )) seconds")
+    end_time=$(date "+%T.000" -d "2020-01-01T00:00:00 $(( image * SECONDS_BETWEEN_FRAMES )) seconds")
+    printf "\n%d\n%s --> %s\n%s#xywh=%d,%d,%d,%d\n" \
+        "$image" "$start_time" "$end_time" "$(basename "$sprite_file_prefix")$file.jpg" \
+        "$(( column * FRAME_WIDTH ))" "$(( row * FRAME_HEIGHT ))" \
+        "$FRAME_WIDTH" "$FRAME_HEIGHT" >> "$vtt_file"
+
+    let ++column
+    if (( column >= MAX_COLUMNS )); then let column=0 ++row; fi
+    if (( row >= MAX_ROWS )); then let row=0 ++file; fi
+done
